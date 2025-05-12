@@ -16,7 +16,7 @@ class Database:
         sqlite_vec.load(conn)
 
         return conn
-    
+
     def _setup_database(self):
         """データベーステーブルの初期設定"""
 
@@ -38,7 +38,8 @@ class Database:
                 "id" INTEGER PRIMARY KEY,
                 "name" TEXT NOT NULL,
                 "path" TEXT,
-                "unit_count" INTEGER NOT NULL
+                "unit_count" INTEGER NOT NULL,
+                "content" TEXT NOT NULL
             );
             """
         )
@@ -62,52 +63,20 @@ class Database:
             );
             """
         )
-        # communities
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS "communities"(
-                "id" INTEGER PRIMARY KEY,
-                "document_id" INTEGER NOT NULL,
-                "summary" TEXT NOT NULL
-            );
-            """
-        )
-        # community_vec
-        cursor.execute(
-            """
-            CREATE VIRTUAL TABLE IF NOT EXISTS "community_vec" USING vec0(
-                embedding float[2048]
-            );
-            """
-        )
-        # relations
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS "relations"(
-                "id" INTEGER PRIMARY KEY,
-                "document_id" INTEGER NOT NULL,
-                "element_a_id" INTEGER NOT NULL,
-                "element_a_type" INTEGER NOT NULL,
-                "element_b_id" INTEGER NOT NULL,
-                "element_b_type" INTEGER NOT NULL,
-                "relationship" TEXT NOT NULL
-            );
-            """
-        )
 
         conn.commit()
         conn.close()
-    
+
     def update_project(self, params) -> None:
         conn = self._connect_db()
         cursor = conn.cursor()
 
         for key, value in params.items():
             cursor.execute('INSERT OR REPLACE INTO "project_info" (key, value) VALUES (?, ?);', (key, value))
-        
+
         conn.commit()
         conn.close()
-    
+
     def get_project_info(self) -> dict[str, str]:
         conn = self._connect_db()
         cursor = conn.cursor()
@@ -118,11 +87,11 @@ class Database:
 
         for row in rows:
             result[row[0]] = row[1]
-        
+
         conn.commit()
         conn.close()
         return result
-    
+
     def get_documents(self):
         conn = self._connect_db()
         cursor = conn.cursor()
@@ -133,6 +102,7 @@ class Database:
             documents.name AS document_name,
             documents.path AS document_path,
             documents.unit_count AS unit_count,
+            documents.content AS document_content,
             text_units.sequence,
             text_units.content,
             text_units_vec.embedding
@@ -151,13 +121,23 @@ class Database:
             "text_units": []
         })
 
-        for doc_id, name, path, unit_count, sequence, content, embedding in results:
+        for (
+            doc_id,
+            name,
+            path,
+            unit_count,
+            document_content,
+            sequence,
+            content,
+            embedding,
+        ) in results:
             doc_entry = documents_dict[doc_id]
             doc_entry["document"] = {
                 "id": doc_id,
                 "name": name,
                 "path": path,
-                "unit_count": unit_count
+                "unit_count": unit_count,
+                "content": document_content,
             }
             doc_entry["text_units"].append({
                 "sequence": sequence,
@@ -166,7 +146,7 @@ class Database:
             })
 
         return list(documents_dict.values())
-    
+
     def get_document_by_id(self, document_id):
         conn = self._connect_db()
         cursor = conn.cursor()
@@ -177,6 +157,7 @@ class Database:
             documents.name AS document_name,
             documents.path AS document_path,
             documents.unit_count AS unit_count,
+            documents.content AS document_content,
             text_units.sequence,
             text_units.content,
             text_units_vec.embedding
@@ -199,11 +180,12 @@ class Database:
                 "id": results[0][0],
                 "name": results[0][1],
                 "path": results[0][2],
-                "unit_count": results[0][3]
+                "unit_count": results[0][3],
+                "content": results[0][4],
             },
             "text_units": [
                 {"sequence": seq, "content": content, "embedding": list(embedding)}
-                for (_, _, _, _, seq, content, embedding) in results
+                for (_, _, _, _, _, seq, content, embedding) in results
             ]
         }
 

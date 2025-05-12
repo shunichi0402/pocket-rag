@@ -1,3 +1,9 @@
+"""
+embedding.py
+
+Markdownテキストの階層的分割・要約・埋め込み生成を行うモジュール。
+PLaMo埋め込みモデルとChatGPT APIを利用。
+"""
 import numpy as np
 import torch
 from transformers import AutoModel, AutoTokenizer
@@ -5,76 +11,71 @@ import re
 import json
 from pocket_rag.gpt import ask_chatgpt
 
-# --- split_text用補助関数 ---
-def extract_headings(text):
-    """
-    Markdownテキストからheading情報を抽出する
-    戻り値: [(開始位置, 階層レベル, タイトル), ...]
-    """
-    heading_pattern = re.compile(r'^(#+) (.*)', re.MULTILINE)
-    return [(m.start(), len(m.group(1)), m.group(2)) for m in heading_pattern.finditer(text)]
 
 def summarize_text(content):
     """
     テキストを100文字以内で要約する（ChatGPT API利用）
+    Args:
+        content (str): 要約対象のテキスト
+    Returns:
+        str: 要約文
     """
-    summary_prompt = f"次のテキストを100文字以内で要約してください。\n---\n{content}\n---"
-    return ask_chatgpt(summary_prompt, system_prompt="あなたは優秀な要約AIです。", model="gpt-4.1-mini")
+
+    system_prompt = """
+あなたはRAGシステムのための優秀な要約AIです。ユーザーから入力されたテキストから、後続の検索や利用を容易にするために、事実情報を高密度に抽出・要約してください。以下の条件に従ってください。
+
+- 要約は必ず300文字以内に収めてください。
+- 文章に含まれる固有名詞（人名、組織名、地名、製品名など）、日時、数値、主要な出来事、具体的な事実関係を可能な限り多く含めてください。
+- **最も重要なのは、生成される要約に含まれる情報量（特に抽出されたエンティティや事実）を最大化することです。** 文章としての自然さや文法的な正確さは不必要です。
+- 内容に意味がない場合は、要約を生成せず「要約なし」の文字列を返してください。
+
+例：
+株式会社ABCは、2023年に新製品「XYZ」を発表。AI技術を活用した自動運転機能を搭載。発表会は東京ビッグサイトで開催、多数のメディアが参加
+"""
+    return ask_chatgpt(content, system_prompt=system_prompt, model="gpt-4.1-mini")
 
 def split_long_text(content):
     """
     1000文字を超えるテキストを意味のまとまりで分割する（ChatGPT API利用）
+    Args:
+        content (str): 分割対象のテキスト
+    Returns:
+        list[dict]: 分割されたテキストのリスト（各要素は{'text': ...}）
     """
-    split_prompt = (
-        f"次のMarkdownテキストを意味のまとまりで1000文字以下に分割してください。\n\n---\n{content}\n---\n"
-        "分割結果はJSONリストで返してください。各要素はtextキーを持つ辞書としてください。"
+    system_prompt = """
+あなたは、与えられた長いテキストを、RAGシステムでの利用に適したチャンクに分割するタスクを実行します。
+
+以下のルールに従って分割してください。
+
+-「意味のまとまり」（例: 段落、セクション、リスト項目など）を基本単位として分割してください。
+- 各チャンクの文字数は、最大500文字以下としてください。
+- 分割後の文章は、分割前とまったく同じ文章を維持するようにしてください。
+- 分割されたチャンクのリストをJSON形式で出力してください。各要素は以下の形式の辞書とします。\\`\\`\\`や完了を伝えるメッセージは含めないでください。
+
+```json
+{
+    chunks: [
+        {"text": "分割されたチャンクのテキスト"}
+    ]
+}
+```
+"""
+    split_result = ask_chatgpt(
+        content,
+        system_prompt=system_prompt,
+        model="gpt-4.1-mini",
+        response_format={"type": "json_object"},
     )
-    split_result = ask_chatgpt(split_prompt, system_prompt="あなたは優秀な文章分割AIです。", model="gpt-4.1-mini")
     return json.loads(split_result)
 
-def build_tree(headings, text, start_idx, end_idx, level):
-    """
-    headingリストをもとに階層的なまとまりのツリーを構築する
-    """
-    nodes = []
-    idx = start_idx
-    while idx < len(headings):
-        pos, h_level, h_title = headings[idx]
-        if h_level < level:
-            break
-        if h_level > level:
-            idx += 1
-            continue
-        # 次の同レベルheadingまでの範囲を決定
-        next_idx = idx + 1
-        while next_idx < len(headings) and headings[next_idx][1] > level:
-            next_idx += 1
-        content_start = headings[idx][0]
-        content_end = headings[next_idx][0] if next_idx < len(headings) else len(text)
-        content = text[content_start:content_end].strip()
-        # 1000文字超ならchatGPTで分割
-        if len(content) > 1000:
-            try:
-                split_chunks = split_long_text(content)
-                children = []
-                for chunk in split_chunks:
-                    chunk_text = chunk["text"]
-                    summary = summarize_text(chunk_text)
-                    children.append({"text": chunk_text, "summary": summary, "children": []})
-                node = {"text": content, "summary": "", "children": children}
-            except Exception as e:
-                node = {"text": content, "summary": f"分割失敗: {e}", "children": []}
-        else:
-            summary = summarize_text(content)
-            children = build_tree(headings, text, idx + 1, end_idx, level + 1)
-            node = {"text": content, "summary": summary, "children": children}
-        nodes.append(node)
-        idx = next_idx
-    return nodes
-
 class Embedding:
+    """
+    PLaMo埋め込みモデルとChatGPT APIを用いたテキスト分割・要約・埋め込み生成クラス
+    """
     def __init__(self):
-        # PLaMo埋め込みモデルのロード
+        """
+        PLaMo埋め込みモデルの初期化
+        """
         self.tokenizer = AutoTokenizer.from_pretrained(
             "pfnet/plamo-embedding-1b", trust_remote_code=True
         )
@@ -87,19 +88,34 @@ class Embedding:
         Markdownテキストをheadingごとに階層的に分割し、
         1000文字を超える場合はchatGPTで意味のまとまりで分割、
         各まとまりごとに要約文を生成する。
-        戻り値はdictのリスト [{'text': ..., 'summary': ..., 'children': [...]}]
+        Args:
+            text (str): Markdown形式のテキスト
+        Returns:
+            list[dict]: 階層的な分割・要約結果
         """
         headings = extract_headings(text)  # heading情報を抽出
         return build_tree(headings, text, 0, len(headings), 1)  # 階層ツリーを構築
 
     def generate_embedding(self, text: str) -> np.ndarray:
-        """PLaMoモデルを使用してテキストの埋め込みベクトルを生成する"""
+        """
+        PLaMoモデルを使用してテキストの埋め込みベクトルを生成する
+        Args:
+            text (str): 埋め込み対象テキスト
+        Returns:
+            np.ndarray: 埋め込みベクトル
+        """
         with torch.inference_mode():
             embedding = self.model.encode_document([text], self.tokenizer)
             return embedding.cpu().numpy().squeeze()
         
     def generate_query(self, text: str) -> np.ndarray:
-        """PLaMoモデルを使用して検索用ベクトルを生成する"""
+        """
+        PLaMoモデルを使用して検索用ベクトルを生成する
+        Args:
+            text (str): クエリテキスト
+        Returns:
+            np.ndarray: 検索用ベクトル
+        """
         with torch.inference_mode():
             embedding = self.model.encode_query([text], self.tokenizer)
             return embedding.cpu().numpy().squeeze()

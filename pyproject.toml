@@ -11,6 +11,10 @@ dependencies = [
     "torch>=2.7.0",
     "transformers>=4.51.3",
     "openai>=1.78.0",
+    "python-dotenv>=1.1.0",
+    "sentencepiece>=0.2.0",
+    "pdf2md @ git+https://github.com/shunichi0402/pdf2md.git",
+    "mistune>=3.1.3",
 ]
 readme = "README.md"
 requires-python = ">= 3.8"

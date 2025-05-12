@@ -50,6 +50,8 @@ jiter==0.9.0
     # via openai
 markupsafe==3.0.2
     # via jinja2
+mistune==3.1.3
+    # via pocket-rag
 mpmath==1.3.0
     # via sympy
 networkx==3.4.2
@@ -58,14 +60,21 @@ numpy==2.2.5
     # via pocket-rag
     # via transformers
 openai==1.78.0
+    # via pdf2md
     # via pocket-rag
 packaging==25.0
     # via huggingface-hub
     # via transformers
+pdf2md @ git+https://github.com/shunichi0402/pdf2md.git@1248413ed953a01f02bda113df0b772f823f2fb0
+    # via pocket-rag
 pydantic==2.11.4
     # via openai
 pydantic-core==2.33.2
     # via pydantic
+pymupdf==1.25.5
+    # via pdf2md
+python-dotenv==1.1.0
+    # via pocket-rag
 pyyaml==6.0.2
     # via huggingface-hub
     # via transformers
@@ -76,6 +85,8 @@ requests==2.32.3
     # via transformers
 safetensors==0.5.3
     # via transformers
+sentencepiece==0.2.0
+    # via pocket-rag
 setuptools==80.3.1
     # via torch
 sniffio==1.3.1
