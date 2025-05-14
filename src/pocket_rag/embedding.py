@@ -34,39 +34,7 @@ def summarize_text(content):
 """
     return ask_chatgpt(content, system_prompt=system_prompt, model="gpt-4.1-mini")
 
-def split_long_text(content):
-    """
-    1000文字を超えるテキストを意味のまとまりで分割する（ChatGPT API利用）
-    Args:
-        content (str): 分割対象のテキスト
-    Returns:
-        list[dict]: 分割されたテキストのリスト（各要素は{'text': ...}）
-    """
-    system_prompt = """
-あなたは、与えられた長いテキストを、RAGシステムでの利用に適したチャンクに分割するタスクを実行します。
 
-以下のルールに従って分割してください。
-
--「意味のまとまり」（例: 段落、セクション、リスト項目など）を基本単位として分割してください。
-- 各チャンクの文字数は、最大500文字以下としてください。
-- 分割後の文章は、分割前とまったく同じ文章を維持するようにしてください。
-- 分割されたチャンクのリストをJSON形式で出力してください。各要素は以下の形式の辞書とします。\\`\\`\\`や完了を伝えるメッセージは含めないでください。
-
-```json
-{
-    chunks: [
-        {"text": "分割されたチャンクのテキスト"}
-    ]
-}
-```
-"""
-    split_result = ask_chatgpt(
-        content,
-        system_prompt=system_prompt,
-        model="gpt-4.1-mini",
-        response_format={"type": "json_object"},
-    )
-    return json.loads(split_result)
 
 class Embedding:
     """
@@ -82,19 +50,6 @@ class Embedding:
         self.model = AutoModel.from_pretrained("pfnet/plamo-embedding-1b", trust_remote_code=True)
         device = "cpu"
         self.model = self.model.to(device)
-
-    def split_text(self, text: str) -> list[dict]:
-        """
-        Markdownテキストをheadingごとに階層的に分割し、
-        1000文字を超える場合はchatGPTで意味のまとまりで分割、
-        各まとまりごとに要約文を生成する。
-        Args:
-            text (str): Markdown形式のテキスト
-        Returns:
-            list[dict]: 階層的な分割・要約結果
-        """
-        headings = extract_headings(text)  # heading情報を抽出
-        return build_tree(headings, text, 0, len(headings), 1)  # 階層ツリーを構築
 
     def generate_embedding(self, text: str) -> np.ndarray:
         """
@@ -119,3 +74,7 @@ class Embedding:
         with torch.inference_mode():
             embedding = self.model.encode_query([text], self.tokenizer)
             return embedding.cpu().numpy().squeeze()
+
+    def serialize_vector(vector: np.ndarray) -> bytes:
+        """ベクトルをバイト形式にシリアライズする"""
+        return np.asarray(vector).astype(np.float32).tobytes()

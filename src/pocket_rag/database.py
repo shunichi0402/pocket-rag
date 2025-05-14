@@ -283,3 +283,62 @@ class Database:
 
         conn.commit()
         conn.close()
+
+    def search_text_units_by_vector(self, embedding: bytes, k: int = 5) -> list[dict]:
+        """
+        ベクトル検索: embeddingベクトルに類似するtext_unitをk件取得する
+        """
+        conn = self._connect_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT text_units_vec.rowid, text_units_vec.distance, tu.content, d.content
+            FROM text_units_vec
+            JOIN text_units tu ON text_units_vec.rowid = tu.id
+            JOIN documents d ON tu.document_id = d.id
+            WHERE text_units_vec.embedding match ? AND k = ?
+            ORDER BY text_units_vec.distance ASC
+            """,
+            (embedding, k),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {
+                "text_unit_id": row[0],
+                "distance": row[1],
+                "text_unit_content": row[2],
+                "document_content": row[3],
+            }
+            for row in rows
+        ]
+
+    def search_text_units_by_keywords(self, keywords: list[str]) -> list[dict]:
+        """
+        キーワード検索: 指定キーワードが含まれるtext_unitを取得する
+        """
+        conn = self._connect_db()
+        cursor = conn.cursor()
+        # AND検索: 全キーワードが含まれるtext_unit
+        where_clause = " OR ".join(["tu.content LIKE ?" for _ in keywords])
+        params = [f"%{kw}%" for kw in keywords]
+        sql = f'''
+            SELECT tu.id, tu.document_id, tu.sequence, tu.content, tu.content_type
+            FROM text_units tu
+            WHERE {where_clause}
+            ORDER BY tu.document_id, tu.sequence
+            '''
+        print(sql)
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {
+                "id": row[0],
+                "document_id": row[1],
+                "sequence": row[2],
+                "content": row[3],
+                "content_type": row[4],
+            }
+            for row in rows
+        ]
