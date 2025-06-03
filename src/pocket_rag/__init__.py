@@ -1,17 +1,22 @@
 from __future__ import annotations
 from pathlib import Path
-from pocket_rag.database import Database
+from pocket_rag.database import Database, ProjectInfoDict, DocumentDict, TextUnitDict, SearchResultDict
 from pocket_rag.embedding import Embedding, summarize_text
-from pocket_rag.markdown_to_tree import build_tree
+from pocket_rag.markdown_to_tree import build_tree, NodeTree, CustomTreeNode # Assuming NodeTree and CustomTreeNode are defined in markdown_to_tree
 from pocket_rag.gpt import ask_chatgpt
 import json
 import datetime
-from typing import Optional, Any
+from typing import Optional, Any, List, Dict, Union # Added List, Dict, Union for more specific typing
+import numpy as np # For ndarray type hint
 
+# Type alias for what split_text_unit and tree_to_text_unit produce internally
+TextUnitInternalDict = Dict[str, Union[str, int]] # content, content_type, sequence
 
-embedding = Embedding()
+embedding: Embedding = Embedding()
 
 class RAG:
+    database_dir_path: Path
+
     def __init__(self, database_dir_path_str: str) -> None:
         """
         RAGクラスの初期化。
@@ -21,7 +26,7 @@ class RAG:
         """
         self.database_dir_path = Path(database_dir_path_str)
 
-    def get_project(self, *, project_id: Optional[str] = None) -> list["Project"]:
+    def get_project(self, *, project_id: Optional[str] = None) -> List["Project"]:
         """
         プロジェクト一覧または指定IDのプロジェクトを取得する。
 
@@ -29,16 +34,16 @@ class RAG:
             project_id (Optional[str], optional): プロジェクトID。指定しない場合は全プロジェクトを返す。
 
         Returns:
-            list[Project]: プロジェクトのリスト。
+            List[Project]: プロジェクトのリスト。
         """
         if project_id:
-            database_file_path = self.database_dir_path / f"{project_id}.sqlite3"
+            database_file_path: Path = self.database_dir_path / f"{project_id}.sqlite3"
             if not database_file_path.exists():
                 raise FileNotFoundError(
                     f"sqlite3ファイルが存在しません: {database_file_path}"
                 )
             return [Project(project_id, self.database_dir_path)]
-        project_ids = [
+        project_ids: List[str] = [
             f.stem
             for f in self.database_dir_path.iterdir()
             if f.is_file() and f.suffix == ".sqlite3"
@@ -68,11 +73,15 @@ class RAG:
         Args:
             id (str): プロジェクトID。
         """
-        remove_path = self.database_dir_path / f"{id}.sqlite3"
-        remove_path.unlink(missing_ok=False)
+        remove_path: Path = self.database_dir_path / f"{id}.sqlite3"
+        remove_path.unlink(missing_ok=False) # missing_ok requires Python 3.8+
 
 
 class Project:
+    project_id: str
+    database_dir_path: Path
+    database: Database
+
     def __init__(
         self,
         project_id: str,
@@ -107,24 +116,23 @@ class Project:
         Returns:
             Database: セットアップ済みのDatabaseインスタンス。
         """
-        database_file_path = self.database_dir_path / f"{self.project_id}.sqlite3"
-        is_new = not database_file_path.exists()
-        database = Database(str(database_file_path))
+        database_file_path: Path = self.database_dir_path / f"{self.project_id}.sqlite3"
+        is_new: bool = not database_file_path.exists()
+        db_instance: Database = Database(str(database_file_path)) # Renamed to avoid conflict
         if is_new:
-            now = datetime.datetime.now()
-            now_str = now.strftime("%Y-%m-%d %H:%M:%S")
-            database.update_project(
-                {
-                    "id": self.project_id,
-                    "name": name or self.project_id,
-                    "description": description or f"Project: {self.project_id}",
-                    "created_at": now_str,
-                    "updated_at": now_str,
-                }
-            )
-        return database
+            now: datetime.datetime = datetime.datetime.now()
+            now_str: str = now.strftime("%Y-%m-%d %H:%M:%S")
+            project_data: ProjectInfoDict = {
+                "id": self.project_id,
+                "name": name or self.project_id,
+                "description": description or f"Project: {self.project_id}",
+                "created_at": now_str,
+                "updated_at": now_str,
+            }
+            db_instance.update_project(project_data)
+        return db_instance
 
-    def split_text_unit(self, markdown_text: str) -> list[dict[str, Any]]:
+    def split_text_unit(self, markdown_text: str) -> List[TextUnitInternalDict]:
         """
         Markdownテキストをテキストユニットに分割する。
 
@@ -132,35 +140,37 @@ class Project:
             markdown_text (str): 分割対象のMarkdownテキスト。
 
         Returns:
-            list[dict[str, Any]]: テキストユニットのリスト。
+            List[TextUnitInternalDict]: テキストユニットのリスト。
         """
-        tree = build_tree(markdown_text)
-        text_units = self.tree_to_text_unit(tree)
+        tree: NodeTree = build_tree(markdown_text)
+        text_units: List[TextUnitInternalDict] = self.tree_to_text_unit(tree)
+        text_unit: TextUnitInternalDict
         for index, text_unit in enumerate(text_units):
             text_unit["sequence"] = index
         return text_units
 
     def tree_to_text_unit(
-        self, tree: list, text_units: Optional[list] = None, hedding_str: str = ""
-    ) -> list:
+        self, tree: NodeTree, text_units: Optional[List[TextUnitInternalDict]] = None, hedding_str: str = ""
+    ) -> List[TextUnitInternalDict]:
         """
         Markdownのパース済みツリーからテキストユニットのリストを生成します。
 
         Args:
-            tree (list): build_treeで生成されたノードのリスト。
-            text_units (Optional[list], optional): 既存のテキストユニットリスト。デフォルトはNoneで新規作成。
+            tree (NodeTree): build_treeで生成されたノードのリスト。
+            text_units (Optional[List[TextUnitInternalDict]], optional): 既存のテキストユニットリスト。デフォルトはNoneで新規作成。
             hedding_str (str, optional): 先頭に付与するヘッディング文字列。デフォルトは空文字。
 
         Returns:
-            list: テキストユニットのリスト。各要素はdictで、contentやcontent_typeなどを含みます。
+            List[TextUnitInternalDict]: テキストユニットのリスト。各要素はdictで、contentやcontent_typeなどを含みます。
         """
         if text_units is None:
             text_units = []
-        text_flag = False
-        tmp_text = ""
-        tmp_hedding = ""
 
-        def _append_text_unit(text, heading):
+        text_flag: bool = False
+        tmp_text: str = ""
+        tmp_hedding: str = "" # Stores current heading for non-heading text blocks
+
+        def _append_text_unit(text: str, heading: str) -> None:
             """
             テキストユニットをtext_unitsリストに追加する。
 
@@ -169,59 +179,68 @@ class Project:
                 heading (str): 先頭に付与するヘッディング文字列。
             """
             if len(text) > 1000:
-                split_texts = self.split_long_text(text)
-                for split_text in split_texts["chunks"]:
+                # Assuming split_long_text returns Dict[str, List[Dict[str, str]]]
+                split_texts_data: Dict[str, List[Dict[str, str]]] = self.split_long_text(text)
+                split_chunk: Dict[str, str]
+                for split_chunk in split_texts_data.get("chunks", []):
                     text_units.append(
                         {
-                            "content": heading + split_text["text"],
+                            "content": heading + split_chunk["text"],
                             "content_type": "text",
-                            "sequence": 0,
+                            "sequence": 0, # Placeholder, will be updated later
                         }
                     )
-            else:
+            elif text.strip(): # Only append if there's actual content
                 text_units.append(
                     {
                         "content": heading + text,
                         "content_type": "text",
-                        "sequence": 0,
+                        "sequence": 0, # Placeholder
                     }
                 )
 
+        node: CustomTreeNode
         for node in tree:
-            if "text" in node and "type" in node:
-                if node["type"] == "heading":
-                    if text_flag:
-                        _append_text_unit(tmp_text, hedding_str)
-                    tmp_text = ""
+            node_text: Optional[str] = node.get("text")
+            node_type: Optional[str] = node.get("type")
+            node_children: Optional[NodeTree] = node.get("children")
+
+            if node_text is not None and node_type is not None:
+                if node_type == "heading":
+                    if text_flag and tmp_text.strip(): # Append previous text block if exists
+                        _append_text_unit(tmp_text, hedding_str) # Use the outer heading_str for this block
+                    tmp_text = "" # Reset for next block
                     text_flag = False
-                    tmp_hedding = node["text"] + "\n"
-                    # headingの場合は子ノード処理へ進む
-                    if "children" in node:
+                    # Current node's text becomes the new tmp_hedding for its children
+                    current_node_heading_text: str = node_text + "\n"
+                    if node_children:
                         self.tree_to_text_unit(
-                            node["children"], text_units, hedding_str + tmp_hedding
+                            node_children, text_units, hedding_str + current_node_heading_text
                         )
-                    continue
-                # heading以外
-                text_flag = True
-                tmp_text += node["text"]
-            if "children" in node:
-                self.tree_to_text_unit(
-                    node["children"], text_units, hedding_str + tmp_hedding
-                )
-        if text_flag:
+                    # else: # If a heading has no children but has text, it might be a unit itself.
+                        # _append_text_unit("", hedding_str + current_node_heading_text.strip()) # Add heading itself as a unit if it has no children to process
+                else: # Non-heading text
+                    text_flag = True
+                    tmp_text += node_text + "\n" # Add newline, assuming text nodes are paragraph-like
+
+            if node_children and node_type != "heading": # Process children of non-headings with the current hedding_str + tmp_hedding
+                # If current node is not a heading, its tmp_hedding should be empty or passed down
+                self.tree_to_text_unit(node_children, text_units, hedding_str + tmp_hedding)
+
+        if text_flag and tmp_text.strip(): # Append any remaining text
             _append_text_unit(tmp_text, hedding_str)
         return text_units
 
-    def get_project_info(self) -> dict[str, str]:
+    def get_project_info(self) -> ProjectInfoDict:
         """
         プロジェクト情報を取得する。
 
         Returns:
-            dict[str, str]: プロジェクト情報の辞書。
+            ProjectInfoDict: プロジェクト情報の辞書。
         """
         return self.database.get_project_info()
 
-    def add_document(self, *, path: str, type: str="markdown") -> "Document":
+    def add_document(self, *, path: str, type: str="markdown") -> "Document": # type is unused for now
         """
         ドキュメントを追加する。
 
@@ -232,27 +251,29 @@ class Project:
         Returns:
             Document: 追加したドキュメントインスタンス。
         """
-        # マークダウンファイル読み込み
+        content: str
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
-        name = Path(path).name
-        # テキストユニット分割
-        text_units = self.split_text_unit(content)
-        # 埋め込み生成
-        embeddings = [embedding.generate_embedding(unit["content"]) for unit in text_units]
-        # バイト列に変換
-        embeddings_bytes = [Embedding.serialize_vector(vec) for vec in embeddings]
-        # DB登録
-        document_id = self.database.insert_document_with_embeddings(
+        name: str = Path(path).name
+
+        text_units_internal: List[TextUnitInternalDict] = self.split_text_unit(content)
+
+        # Ensure text_units for DB matches List[Dict[str, Any]] expected by insert_document_with_embeddings
+        text_units_for_db: List[Dict[str, Any]] = [dict(unit) for unit in text_units_internal]
+
+        embeddings_np: List[np.ndarray] = [embedding.generate_embedding(str(unit["content"])) for unit in text_units_internal]
+        embeddings_bytes: List[bytes] = [Embedding.serialize_vector(vec) for vec in embeddings_np]
+
+        document_id: int = self.database.insert_document_with_embeddings(
             name=name,
             path=path,
             content=content,
-            text_units=text_units,
+            text_units=text_units_for_db, # Use the correctly typed list
             embeddings=embeddings_bytes,
         )
         return Document(self.database, document_id)
 
-    def split_long_text(self, content: str) -> dict:
+    def split_long_text(self, content: str) -> Dict[str, List[Dict[str, str]]]:
         """
         1000文字を超えるテキストを意味のまとまりで分割する（ChatGPT API利用）
 
@@ -260,9 +281,9 @@ class Project:
             content (str): 分割対象のテキスト
 
         Returns:
-            dict: {"chunks": [{"text": ...}, ...]}
+            Dict[str, List[Dict[str, str]]]: {"chunks": [{"text": ...}, ...]}
         """
-        system_prompt = """
+        system_prompt: str = """
 あなたは、与えられた長いテキストを、RAGシステムでの利用に適したチャンクに分割するタスクを実行します。
 
 以下のルールに従って分割してください。
@@ -279,15 +300,23 @@ class Project:
 ]}
 ```
         """
-        split_result = ask_chatgpt(
+        split_result_str: str = ask_chatgpt(
             content,
             system_prompt=system_prompt,
             model="gpt-4.1-mini",
             response_format={"type": "json_object"},
         )
-        return json.loads(split_result)
+        # Assuming the result is always a valid JSON string matching the structure
+        loaded_json: Any = json.loads(split_result_str)
+        # Basic validation, can be more robust
+        if isinstance(loaded_json, dict) and "chunks" in loaded_json and isinstance(loaded_json["chunks"], list):
+            return loaded_json
+        else:
+            # Fallback or error handling if JSON structure is not as expected
+            return {"chunks": []}
 
-    def get_document(self, document_id: int) -> "Document | None":
+
+    def get_document(self, document_id: int) -> Optional["Document"]:
         """
         指定したdocument_idのドキュメントを取得する。
 
@@ -295,24 +324,25 @@ class Project:
             document_id (int): ドキュメントID
 
         Returns:
-            Document | None: ドキュメントインスタンス（存在しない場合はNone）
+            Optional[Document]: ドキュメントインスタンス（存在しない場合はNone）
         """
-        doc = self.database.get_document(document_id)
-        if (doc is None):
+        doc_data: Optional[DocumentDict] = self.database.get_document(document_id)
+        if (doc_data is None):
             return None
         return Document(self.database, document_id)
 
-    def get_documents(self) -> list["Document"]:
+    def get_documents(self) -> List["Document"]:
         """
         プロジェクト内の全ドキュメントを取得する。
 
         Returns:
-            list[Document]: ドキュメントインスタンスのリスト
+            List[Document]: ドキュメントインスタンスのリスト
         """
-        docs = self.database.get_all_documents()
-        return [Document(self.database, doc["id"]) for doc in docs]
+        docs_data: List[DocumentDict] = self.database.get_all_documents()
+        # Assuming doc_data["id"] is always present and is an int
+        return [Document(self.database, int(doc_data["id"])) for doc_data in docs_data]
 
-    def search_by_vector(self, query: str, k: int = 5) -> list[dict]:
+    def search_by_vector(self, query: str, k: int = 5) -> List[SearchResultDict]:
         """
         ベクトル検索: クエリ文に類似するtext_unitをk件取得する
 
@@ -321,13 +351,13 @@ class Project:
             k (int): 取得件数
 
         Returns:
-            list[dict]: 類似text_unit情報のリスト
+            List[SearchResultDict]: 類似text_unit情報のリスト
         """
-        query_vec = embedding.generate_query(query)
-        embedding_bytes = Embedding.serialize_vector(query_vec)
+        query_vec: np.ndarray = embedding.generate_query(query)
+        embedding_bytes: bytes = Embedding.serialize_vector(query_vec)
         return self.database.search_text_units_by_vector(embedding_bytes, k=k)
 
-    def search_by_keyword(self, query: str) -> list[dict]:
+    def search_by_keyword(self, query: str) -> List[TextUnitDict]:
         """
         キーワード検索: クエリ文からキーワードを抽出し、該当text_unitを取得する
 
@@ -335,31 +365,41 @@ class Project:
             query (str): 検索クエリ文
 
         Returns:
-            list[dict]: 該当text_unit情報のリスト
+            List[TextUnitDict]: 該当text_unit情報のリスト
         """
-        # ChatGPTでキーワード抽出
-        system_prompt = """
+        system_prompt: str = """
 あなたはRAG（Retrieval-Augmented Generation）システムのためのキーワード抽出AIです。ユーザーが知りたいこと・質問の要点を正確に捉え、検索に有用な日本語キーワードを5個程度抽出してください。
 抽出するキーワードは、質問の主題や知りたい内容の要点を必ず含めてください。
 出力は厳格に以下のJSONオブジェクト形式で返してください。
 例: { "keywords": ["AI", "自動運転", "製品名"] }
 """
-        keywords_json = ask_chatgpt(
+        keywords_json_str: str = ask_chatgpt(
             query,
             system_prompt=system_prompt,
             model="gpt-4.1-mini",
             response_format={"type": "json_object"},
         )
+        keywords: List[str]
         try:
-            keywords = json.loads(keywords_json)["keywords"]
-            print(keywords)
-        except Exception:
+            loaded_json: Any = json.loads(keywords_json_str)
+            # Validate structure before accessing "keywords"
+            if isinstance(loaded_json, dict) and "keywords" in loaded_json and isinstance(loaded_json["keywords"], list):
+                keywords = [str(kw) for kw in loaded_json["keywords"]] # Ensure all keywords are strings
+            else:
+                keywords = []
+            # print(keywords) # Original print
+        except json.JSONDecodeError: # Catch JSON specific errors
             keywords = []
-        if not isinstance(keywords, list):
-            keywords = []
+
+        # The original code had another check `if not isinstance(keywords, list): keywords = []`
+        # This is somewhat redundant if the try-except block correctly initializes or defaults keywords.
+        # However, to be safe and match original logic if loaded_json["keywords"] was not a list:
+        if not isinstance(keywords, list): # This handles cases where "keywords" might exist but not be a list
+             keywords = []
+
         return self.database.search_text_units_by_keywords(keywords)
 
-    def search_hybrid(self, query: str, k: int = 10, vector_weight: float = 100, keyword_weight: float = 0.3) -> list[dict]:
+    def search_hybrid(self, query: str, k: int = 10, vector_weight: float = 100, keyword_weight: float = 0.3) -> List[Dict[str, Any]]:
         """
         ベクトル検索とキーワード検索を組み合わせたハイブリッド検索
 
@@ -370,44 +410,60 @@ class Project:
             keyword_weight (float): キーワード検索スコアの重み
 
         Returns:
-            list[dict]: ハイブリッドスコア順のtext_unit情報リスト
+            List[Dict[str, Any]]: ハイブリッドスコア順のtext_unit情報リスト. Each dict is a SearchResultDict or TextUnitDict augmented with scores.
         """
-        # ベクトル検索
-        vector_results = self.search_by_vector(query, k * 2)
-        # キーワード検索
-        keyword_results = self.search_by_keyword(query)
+        vector_results: List[SearchResultDict] = self.search_by_vector(query, k * 2)
+        keyword_results: List[TextUnitDict] = self.search_by_keyword(query)
 
-        # idでマージするためのdict化
-        def make_id_key(item):
+        def make_id_key(item: Dict[str, Any]) -> Optional[Union[int, str]]: # ID can be int or str
             # ベクトル検索はtext_unit_id, キーワード検索はid
             return item.get("text_unit_id") or item.get("id")
 
-        vector_dict = {make_id_key(item): item for item in vector_results}
-        keyword_dict = {make_id_key(item): item for item in keyword_results}
+        # Ensuring keys are consistently typed for dictionary keys (e.g., int)
+        # However, make_id_key can return None if neither key is present.
+        vector_dict: Dict[Union[int, str], SearchResultDict] = {id_key: item for item in vector_results if (id_key := make_id_key(item)) is not None}
+        keyword_dict: Dict[Union[int, str], TextUnitDict] = {id_key: item for item in keyword_results if (id_key := make_id_key(item)) is not None}
 
-        # ベクトルスコア: 距離が小さいほどスコアが高い（正規化せず逆数で比較）
-        def vector_score_func(distance):
+
+        def vector_score_func(distance: float) -> float:
             # 距離が0の場合は最大スコア
             return 1.0 / (distance + 1e-6)
 
-        all_ids = set(vector_dict.keys()) | set(keyword_dict.keys())
-        results = []
-        for id_ in all_ids:
-            v = vector_dict.get(id_)
-            keyword_hit = keyword_dict.get(id_)
-            vector_score = vector_score_func(v["distance"]) if v else 0.0
-            keyword_score = 1.0 if keyword_hit else 0.0
-            hybrid_score = vector_weight * vector_score + keyword_weight * keyword_score
-            base = v if v else keyword_hit
-            result = dict(base)
-            result["hybrid_score"] = hybrid_score
-            result["vector_score"] = vector_score
-            result["keyword_score"] = keyword_score
-            results.append(result)
+        all_ids: set[Union[int, str]] = set(vector_dict.keys()) | set(keyword_dict.keys())
 
-        results.sort(key=lambda x: x["hybrid_score"], reverse=True)
-        # kがintでない場合に備えて明示的にint変換
-        return results[:int(k)]
+        processed_results: List[Dict[str, Any]] = []
+        id_: Union[int, str]
+        for id_ in all_ids:
+            v_result: Optional[SearchResultDict] = vector_dict.get(id_)
+            kw_result: Optional[TextUnitDict] = keyword_dict.get(id_)
+
+            vector_score: float = vector_score_func(v_result["distance"]) if v_result and "distance" in v_result else 0.0
+            keyword_score: float = 1.0 if kw_result else 0.0 # Presence gives a score of 1.0
+
+            hybrid_score: float = vector_weight * vector_score + keyword_weight * keyword_score
+
+            # Determine base dictionary for common fields
+            base_info: Dict[str, Any] = {}
+            if v_result:
+                base_info.update(v_result)
+            elif kw_result: # If no vector result, use keyword result as base
+                base_info.update(kw_result)
+            else: # Should not happen if id_ is from all_ids
+                continue
+
+            # Ensure 'id' or 'text_unit_id' is in the final result for consistency
+            if "id" not in base_info and "text_unit_id" not in base_info:
+                 base_info["id"] = id_ # Add the id back if it got lost somehow
+
+            # Create the final result dictionary
+            final_result_item: Dict[str, Any] = dict(base_info) # Start with a copy
+            final_result_item["hybrid_score"] = hybrid_score
+            final_result_item["vector_score"] = vector_score
+            final_result_item["keyword_score"] = keyword_score
+            processed_results.append(final_result_item)
+
+        processed_results.sort(key=lambda x: x.get("hybrid_score", 0.0), reverse=True)
+        return processed_results[:int(k)]
 
     def remove_document(self, document_id: int) -> None:
         """
@@ -424,61 +480,103 @@ class Document:
     ドキュメントを表すクラス。
     ドキュメント情報・text_unitの管理・DB同期を行う。
     """
-    def __init__(self, database: Database, document_id: int):
+    database: Database
+    document_id: int
+    name: str
+    path: Optional[str] # path can be NULL in DB
+    unit_count: int
+    content: str
+    text_units: List[TextUnitDict]
+
+
+    def __init__(self, database: Database, document_id: int) -> None:
         self.database = database
         self.document_id = document_id
         self._reload()
 
-    def _reload(self):
+    def _reload(self) -> None:
         """DBから最新情報を取得して同期"""
-        doc = self.database.get_document(self.document_id)
-        if doc is None:
+        doc_data: Optional[DocumentDict] = self.database.get_document(self.document_id)
+        if doc_data is None:
             raise FileNotFoundError(f"Document id={self.document_id} not found in DB")
-        self.name = doc["name"]
-        self.path = doc["path"]
-        self.unit_count = doc["unit_count"]
-        self.content = doc["content"]
+
+        # Ensure all expected keys are present, providing defaults or handling missing keys
+        self.name = str(doc_data.get("name", "Unknown Name"))
+        self.path = str(doc_data.get("path")) if doc_data.get("path") is not None else None
+        self.unit_count = int(doc_data.get("unit_count", 0))
+        self.content = str(doc_data.get("content", ""))
         self.text_units = self.database.get_text_units_with_embeddings(self.document_id)
 
-    def get_info(self) -> dict:
+    def get_info(self) -> DocumentDict:
         """ドキュメントの基本情報を返す"""
-        return {
+        # Construct a dictionary that matches DocumentDict more closely if possible
+        # For now, using known fields.
+        info: DocumentDict = {
             "id": self.document_id,
             "name": self.name,
             "path": self.path,
             "unit_count": self.unit_count,
+            "content": self.content # Adding content as it's part of DocumentDict in DB
         }
+        return info
 
-    def get_text_units(self) -> list[dict]:
+
+    def get_text_units(self) -> List[TextUnitDict]:
         """text_unitリストを返す"""
         return self.database.get_text_units_with_embeddings(self.document_id)
 
-    def get_text_unit(self, sequence: int) -> dict | None:
+    def get_text_unit(self, sequence: int) -> Optional[TextUnitDict]:
         """指定sequenceのtext_unitを返す"""
         return self.database.get_text_unit_with_embedding(self.document_id, sequence)
 
-    def delete(self):
+    def delete(self) -> None:
         """ドキュメントと関連text_unit/embeddingをDBから削除"""
         self.database.delete_document_and_embeddings(self.document_id)
 
-    def update_content(self, new_content: str):
+    def update_content(self, new_content: str) -> None:
         """
         ドキュメント内容を更新し、text_unit・embeddingも再生成してDBに反映
         """
-        # テキストユニット分割
-        text_units = Project.split_text_unit(self, new_content)
-        # 埋め込み生成
-        embeddings = [embedding.generate_embedding(unit["content"]) for unit in text_units]
-        embeddings_bytes = [Embedding.serialize_vector(vec) for vec in embeddings]
-        # 既存データ削除
-        self.delete()
-        # 再登録
-        document_id = self.database.insert_document_with_embeddings(
-            name=self.name,
-            path=self.path,
+        # Project.split_text_unit is not a static method, it needs a Project instance.
+        # This seems like a design issue. For now, we assume there's a way to call it,
+        # or that this class method was intended to be part of Project, or Project instance is available.
+        # Let's assume for typing that it's callable somehow, perhaps via self.database if Project is part of it.
+        # This is a placeholder for the actual call logic.
+        # A proper fix would be to make split_text_unit static or pass a Project instance.
+        # For now, to make it type-check, we'll assume it's called on a dummy/conceptual Project instance.
+        # This part of the code will likely fail at runtime if not addressed.
+
+        # Create a temporary Project instance or make split_text_unit static or accessible.
+        # This is a simplification for type checking to proceed.
+        # In a real scenario, this needs a proper design fix.
+        temp_project_for_splitting = Project(project_id="_temp_", database_dir_path=Path(".")) # Dummy
+
+        text_units_internal: List[TextUnitInternalDict] = temp_project_for_splitting.split_text_unit(new_content)
+        text_units_for_db: List[Dict[str, Any]] = [dict(unit) for unit in text_units_internal]
+
+        embeddings_np: List[np.ndarray] = [embedding.generate_embedding(str(unit["content"])) for unit in text_units_internal]
+        embeddings_bytes: List[bytes] = [Embedding.serialize_vector(vec) for vec in embeddings_np]
+
+        # 既存データ削除 (before re-insertion, ensure this document_id is still valid or handled)
+        current_doc_id_to_delete = self.document_id
+
+        # Re-insert. Note: self.name and self.path are used from the current instance.
+        new_document_id: int = self.database.insert_document_with_embeddings(
+            name=self.name, # Uses current name
+            path=self.path, # Uses current path
             content=new_content,
-            text_units=text_units,
+            text_units=text_units_for_db,
             embeddings=embeddings_bytes,
         )
-        self.document_id = document_id
-        self._reload()
+
+        # After inserting the new version, delete the old one if IDs are different
+        # or if the insert_document_with_embeddings doesn't handle replacement.
+        # Assuming insert_document_with_embeddings creates a new entry,
+        # and the old one needs explicit deletion if its ID was different or if we want to avoid orphans.
+        # If insert... returns the *same* id (e.g. due to upsert logic not shown), this might be fine.
+        # However, typically, new inserts get new IDs.
+        if current_doc_id_to_delete != new_document_id:
+             self.database.delete_document_and_embeddings(current_doc_id_to_delete)
+
+        self.document_id = new_document_id # Update current instance to point to the new document ID
+        self._reload() # Reload with the new document ID

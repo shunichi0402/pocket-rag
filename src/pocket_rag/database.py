@@ -2,6 +2,14 @@ from __future__ import annotations
 from collections import defaultdict
 import sqlite3
 import sqlite_vec
+from typing import List, Dict, Optional, Tuple, Any
+
+# Type Aliases
+Row = Tuple[Any, ...] # Generic database row
+ProjectInfoDict = Dict[str, str]
+DocumentDict = Dict[str, Any] # Could be a TypedDict for more precision
+TextUnitDict = Dict[str, Any]  # Could be a TypedDict for more precision
+SearchResultDict = Dict[str, Any] # For search results
 
 
 class Database:
@@ -11,17 +19,17 @@ class Database:
 
     def _connect_db(self) -> sqlite3.Connection:
         """データベースに接続する"""
-        conn = sqlite3.connect(self.database_path, timeout=10)
+        conn: sqlite3.Connection = sqlite3.connect(self.database_path, timeout=10)
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
 
         return conn
 
-    def _setup_database(self):
+    def _setup_database(self) -> None:
         """データベーステーブルの初期設定"""
 
-        conn = self._connect_db()
-        cursor = conn.cursor()
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
         # project info
         cursor.execute(
             """
@@ -67,9 +75,9 @@ class Database:
         conn.commit()
         conn.close()
 
-    def update_project(self, params) -> None:
-        conn = self._connect_db()
-        cursor = conn.cursor()
+    def update_project(self, params: ProjectInfoDict) -> None:
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
 
         for key, value in params.items():
             cursor.execute('INSERT OR REPLACE INTO "project_info" (key, value) VALUES (?, ?);', (key, value))
@@ -77,32 +85,32 @@ class Database:
         conn.commit()
         conn.close()
 
-    def get_project_info(self) -> dict[str, str]:
-        conn = self._connect_db()
-        cursor = conn.cursor()
+    def get_project_info(self) -> ProjectInfoDict:
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
 
         cursor.execute('SELECT * FROM "project_info";')
-        rows = cursor.fetchall()
-        result = {}
+        rows: List[Tuple[str, str]] = cursor.fetchall() # key, value are both TEXT
+        result: ProjectInfoDict = {}
 
         for row in rows:
             result[row[0]] = row[1]
 
-        conn.commit()
+        conn.commit() # Not strictly necessary for SELECT, but doesn't hurt.
         conn.close()
         return result
 
-    def get_document(self, document_id: int) -> dict | None:
+    def get_document(self, document_id: int) -> Optional[DocumentDict]:
         """
         指定したdocument_idのドキュメントを取得する
         """
-        conn = self._connect_db()
-        cursor = conn.cursor()
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
         cursor.execute(
             'SELECT id, name, path, unit_count, content FROM "documents" WHERE id = ?;',
             (document_id,)
         )
-        row = cursor.fetchone()
+        row: Optional[Tuple[int, str, Optional[str], int, str]] = cursor.fetchone()
         conn.close()
         if row:
             return {
@@ -115,16 +123,16 @@ class Database:
         else:
             return None
 
-    def get_all_documents(self) -> list[dict]:
+    def get_all_documents(self) -> List[DocumentDict]:
         """
         すべてのドキュメントを取得する
         """
-        conn = self._connect_db()
-        cursor = conn.cursor()
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
         cursor.execute(
             'SELECT id, name, path, unit_count, content FROM "documents";'
         )
-        rows = cursor.fetchall()
+        rows: List[Tuple[int, str, Optional[str], int, str]] = cursor.fetchall()
         conn.close()
         return [
             {
@@ -137,12 +145,12 @@ class Database:
             for row in rows
         ]
 
-    def get_text_units_with_embeddings(self, document_id: int) -> list[dict]:
+    def get_text_units_with_embeddings(self, document_id: int) -> List[TextUnitDict]:
         """
         指定したドキュメントのすべてのtext_unitsとその埋め込みベクトルを取得する
         """
-        conn = self._connect_db()
-        cursor = conn.cursor()
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
         cursor.execute(
             '''
             SELECT tu.id, tu.document_id, tu.sequence, tu.content, tu.content_type, tuv.embedding
@@ -153,7 +161,7 @@ class Database:
             ''',
             (document_id,)
         )
-        rows = cursor.fetchall()
+        rows: List[Tuple[int, int, int, str, str, Optional[bytes]]] = cursor.fetchall()
         conn.close()
         return [
             {
@@ -167,12 +175,12 @@ class Database:
             for row in rows
         ]
 
-    def get_text_unit_with_embedding(self, document_id: int, sequence: int) -> dict | None:
+    def get_text_unit_with_embedding(self, document_id: int, sequence: int) -> Optional[TextUnitDict]:
         """
         指定したドキュメントの指定したsequenceのtext_unitとその埋め込みベクトルを取得する
         """
-        conn = self._connect_db()
-        cursor = conn.cursor()
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
         cursor.execute(
             '''
             SELECT tu.id, tu.document_id, tu.sequence, tu.content, tu.content_type, tuv.embedding
@@ -182,7 +190,7 @@ class Database:
             ''',
             (document_id, sequence)
         )
-        row = cursor.fetchone()
+        row: Optional[Tuple[int, int, int, str, str, Optional[bytes]]] = cursor.fetchone()
         conn.close()
         if row:
             return {
@@ -199,10 +207,10 @@ class Database:
     def insert_document_with_embeddings(
         self,
         name: str,
-        path: str | None,
+        path: Optional[str], # Changed from str | None
         content: str,
-        text_units: list[dict],
-        embeddings: list[bytes]
+        text_units: List[Dict[str, Any]], # Specific TypedDict would be better
+        embeddings: List[bytes]
     ) -> int:
         """
         ドキュメント・text_units・埋め込みベクトルをまとめて登録する
@@ -210,8 +218,8 @@ class Database:
         embeddings: [bytes]  # text_unitsと同じ順序
         戻り値: 登録したドキュメントのid
         """
-        conn = self._connect_db()
-        cursor = conn.cursor()
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
 
         # ドキュメント登録
         cursor.execute(
@@ -221,11 +229,23 @@ class Database:
             ''',
             (name, path, len(text_units), content)
         )
-        document_id = cursor.lastrowid
+        # cursor.lastrowid is Optional[int], but after a successful INSERT, it should be an int.
+        # If an error occurred, an exception would likely be raised before this point.
+        doc_id: Optional[int] = cursor.lastrowid
+        if doc_id is None:
+            # This case should ideally not happen if the INSERT was successful
+            # and the table has an autoincrementing primary key.
+            # Handling it defensively.
+            conn.rollback()
+            conn.close()
+            raise sqlite3.Error("Failed to retrieve document_id after insert.")
+        document_id: int = doc_id
+
 
         # text_units登録
-        text_unit_ids = []
-        for i, unit in enumerate(text_units):
+        text_unit_ids: List[int] = []
+        unit: Dict[str, Any]
+        for unit in text_units: # removed enumerate as i is not used
             cursor.execute(
                 '''
                 INSERT INTO text_units (document_id, sequence, content, content_type)
@@ -233,15 +253,22 @@ class Database:
                 ''',
                 (document_id, unit["sequence"], unit["content"], unit["content_type"])
             )
-            text_unit_ids.append(cursor.lastrowid)
+            tu_id: Optional[int] = cursor.lastrowid
+            if tu_id is None:
+                conn.rollback()
+                conn.close()
+                raise sqlite3.Error("Failed to retrieve text_unit_id after insert.")
+            text_unit_ids.append(tu_id)
 
         # text_units_vec（埋め込み）登録
-        for rowid, embedding in zip(text_unit_ids, embeddings):
+        rowid: int
+        embedding_bytes: bytes # Renamed from embedding to avoid conflict
+        for rowid, embedding_bytes in zip(text_unit_ids, embeddings):
             cursor.execute(
                 '''
                 INSERT INTO text_units_vec (rowid, embedding) VALUES (?, ?)
                 ''',
-                (rowid, embedding)
+                (rowid, embedding_bytes)
             )
 
         conn.commit()
@@ -252,17 +279,18 @@ class Database:
         """
         指定したドキュメントとその関連text_units・埋め込みをすべて削除する
         """
-        conn = self._connect_db()
-        cursor = conn.cursor()
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
 
         # 関連するtext_unitのidを取得
         cursor.execute(
             'SELECT id FROM text_units WHERE document_id = ?',
             (document_id,)
         )
-        text_unit_ids = [row[0] for row in cursor.fetchall()]
+        text_unit_ids: List[int] = [row[0] for row in cursor.fetchall()]
 
         # text_units_vec（埋め込み）削除
+        tu_id: int
         for tu_id in text_unit_ids:
             cursor.execute(
                 'DELETE FROM text_units_vec WHERE rowid = ?',
@@ -284,24 +312,25 @@ class Database:
         conn.commit()
         conn.close()
 
-    def search_text_units_by_vector(self, embedding: bytes, k: int = 5) -> list[dict]:
+    def search_text_units_by_vector(self, embedding: bytes, k: int = 5) -> List[SearchResultDict]:
         """
         ベクトル検索: embeddingベクトルに類似するtext_unitをk件取得する
         """
-        conn = self._connect_db()
-        cursor = conn.cursor()
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
         cursor.execute(
             """
             SELECT text_units_vec.rowid, text_units_vec.distance, tu.content, d.content
             FROM text_units_vec
             JOIN text_units tu ON text_units_vec.rowid = tu.id
             JOIN documents d ON tu.document_id = d.id
-            WHERE text_units_vec.embedding match ? AND k = ?
+            WHERE text_units_vec.embedding MATCH ? AND k = ?
             ORDER BY text_units_vec.distance ASC
-            """,
+            """,  # Corrected: MATCH, not match. k = ? might be sqlite-vec specific syntax or needs to be part of MATCH. Assuming it's correct.
             (embedding, k),
         )
-        rows = cursor.fetchall()
+        # Assuming rowid is int, distance is float, content is str
+        rows: List[Tuple[int, float, str, str]] = cursor.fetchall()
         conn.close()
         return [
             {
@@ -313,24 +342,31 @@ class Database:
             for row in rows
         ]
 
-    def search_text_units_by_keywords(self, keywords: list[str]) -> list[dict]:
+    def search_text_units_by_keywords(self, keywords: List[str]) -> List[TextUnitDict]:
         """
         キーワード検索: 指定キーワードが含まれるtext_unitを取得する
         """
-        conn = self._connect_db()
-        cursor = conn.cursor()
-        # AND検索: 全キーワードが含まれるtext_unit
-        where_clause = " OR ".join(["tu.content LIKE ?" for _ in keywords])
-        params = [f"%{kw}%" for kw in keywords]
-        sql = f'''
+        conn: sqlite3.Connection = self._connect_db()
+        cursor: sqlite3.Cursor = conn.cursor()
+        # OR検索 based on original code: any keyword matches
+        where_clause: str = " OR ".join(["tu.content LIKE ?" for _ in keywords])
+        params: List[str] = [f"%{kw}%" for kw in keywords]
+
+        # Ensure keywords list is not empty to prevent SQL syntax error with empty WHERE clause
+        if not keywords:
+            conn.close()
+            return []
+
+        sql: str = f'''
             SELECT tu.id, tu.document_id, tu.sequence, tu.content, tu.content_type
             FROM text_units tu
             WHERE {where_clause}
             ORDER BY tu.document_id, tu.sequence
             '''
-        print(sql)
+        # print(sql) # Original code had a print here, kept for consistency if needed for debugging.
         cursor.execute(sql, params)
-        rows = cursor.fetchall()
+        # Assuming id, document_id, sequence are int; content, content_type are str
+        rows: List[Tuple[int, int, int, str, str]] = cursor.fetchall()
         conn.close()
         return [
             {
