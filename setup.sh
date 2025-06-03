@@ -4,13 +4,10 @@
 if ! command -v rye &> /dev/null
 then
     echo "rye がインストールされていません。インストールを開始します..."
-    curl -sSf https://rye.astral.sh/get | bash -s -- --yes
+    curl -sSf https://rye.astral.sh/get | RYE_INSTALL_OPTION="--yes" bash
     echo "" # 改行のため
     echo "rye のインストールが完了しました。"
-    echo "変更を有効にするために、現在のシェルを再起動するか、以下のコマンドを実行してください:"
-    echo "  source \"\$HOME/.rye/env\""
-    echo "その後、再度 ./setup.sh を実行してください。"
-    exit 0
+    source "$HOME/.rye/env"
 else
     echo "rye は既にインストールされています。"
 fi
