@@ -12,6 +12,7 @@ from transformers.modeling_utils import PreTrainedModel
 import re
 import json
 from pocket_rag.gpt import ask_chatgpt
+from pocket_rag.prompt_templates import PROMPT_SUMMARIZE_TEXT
 from numpy.typing import NDArray
 from typing import List, Dict, Optional, Any
 
@@ -25,18 +26,7 @@ def summarize_text(content: str) -> str:
         str: 要約文
     """
 
-    system_prompt: str = """
-あなたはRAGシステムのための優秀な要約AIです。ユーザーから入力されたテキストから、後続の検索や利用を容易にするために、事実情報を高密度に抽出・要約してください。以下の条件に従ってください。
-
-- 要約は必ず300文字以内に収めてください。
-- 文章に含まれる固有名詞（人名、組織名、地名、製品名など）、日時、数値、主要な出来事、具体的な事実関係を可能な限り多く含めてください。
-- **最も重要なのは、生成される要約に含まれる情報量（特に抽出されたエンティティや事実）を最大化することです。** 文章としての自然さや文法的な正確さは不必要です。
-- 内容に意味がない場合は、要約を生成せず「要約なし」の文字列を返してください。
-
-例：
-株式会社ABCは、2023年に新製品「XYZ」を発表。AI技術を活用した自動運転機能を搭載。発表会は東京ビッグサイトで開催、多数のメディアが参加
-"""
-    return ask_chatgpt(content, system_prompt=system_prompt, model="gpt-4.1-mini")
+    return ask_chatgpt(content, system_prompt=PROMPT_SUMMARIZE_TEXT, model="gpt-4.1-mini")
 
 
 

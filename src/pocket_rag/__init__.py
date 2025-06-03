@@ -4,6 +4,7 @@ from pocket_rag.database import Database, ProjectInfoDict, DocumentDict, TextUni
 from pocket_rag.embedding import Embedding, summarize_text
 from pocket_rag.markdown_to_tree import build_tree, NodeTree, CustomTreeNode # Assuming NodeTree and CustomTreeNode are defined in markdown_to_tree
 from pocket_rag.gpt import ask_chatgpt
+from pocket_rag.prompt_templates import PROMPT_SPLIT_LONG_TEXT, PROMPT_KEYWORD_EXTRACTION, PROMPT_CHAT_ANSWER
 import json
 import datetime
 from typing import Optional, Any, List, Dict, Union # Added List, Dict, Union for more specific typing
@@ -218,7 +219,7 @@ class Project:
                             node_children, text_units, hedding_str + current_node_heading_text
                         )
                     # else: # If a heading has no children but has text, it might be a unit itself.
-                        # _append_text_unit("", hedding_str + current_node_heading_text.strip()) # Add heading itself as a unit if it has no children to process
+                    # _append_text_unit("", hedding_str + current_node_heading_text.strip()) # Add heading itself as a unit if it has no children to process
                 else: # Non-heading text
                     text_flag = True
                     tmp_text += node_text + "\n" # Add newline, assuming text nodes are paragraph-like
@@ -276,45 +277,18 @@ class Project:
     def split_long_text(self, content: str) -> Dict[str, List[Dict[str, str]]]:
         """
         1000文字を超えるテキストを意味のまとまりで分割する（ChatGPT API利用）
-
-        Args:
-            content (str): 分割対象のテキスト
-
-        Returns:
-            Dict[str, List[Dict[str, str]]]: {"chunks": [{"text": ...}, ...]}
-        """
-        system_prompt: str = """
-あなたは、与えられた長いテキストを、RAGシステムでの利用に適したチャンクに分割するタスクを実行します。
-
-以下のルールに従って分割してください。
-
--「意味のまとまり」（例: 同じ話題、同じトピック、同じ段落）を基本単位として分割してください。
-- 各チャンクの文字数は、最大1000文字以下としてください。
-- 「文字数の制限」と「意味のまとまりの制限」を満たす中で、なるべく少ないチャンク数になるように分割してください。
-- 分割後の文章は、分割前とまったく同じ文章を維持するようにしてください。
-- 分割されたチャンクのリストをJSON形式で出力してください。
-
-```json
-{chunks: [
-    {"text": "分割されたチャンクのテキスト"}
-]}
-```
         """
         split_result_str: str = ask_chatgpt(
             content,
-            system_prompt=system_prompt,
+            system_prompt=PROMPT_SPLIT_LONG_TEXT,
             model="gpt-4.1-mini",
             response_format={"type": "json_object"},
         )
-        # Assuming the result is always a valid JSON string matching the structure
         loaded_json: Any = json.loads(split_result_str)
-        # Basic validation, can be more robust
         if isinstance(loaded_json, dict) and "chunks" in loaded_json and isinstance(loaded_json["chunks"], list):
             return loaded_json
         else:
-            # Fallback or error handling if JSON structure is not as expected
             return {"chunks": []}
-
 
     def get_document(self, document_id: int) -> Optional["Document"]:
         """
@@ -360,43 +334,24 @@ class Project:
     def search_by_keyword(self, query: str) -> List[TextUnitDict]:
         """
         キーワード検索: クエリ文からキーワードを抽出し、該当text_unitを取得する
-
-        Args:
-            query (str): 検索クエリ文
-
-        Returns:
-            List[TextUnitDict]: 該当text_unit情報のリスト
         """
-        system_prompt: str = """
-あなたはRAG（Retrieval-Augmented Generation）システムのためのキーワード抽出AIです。ユーザーが知りたいこと・質問の要点を正確に捉え、検索に有用な日本語キーワードを5個程度抽出してください。
-抽出するキーワードは、質問の主題や知りたい内容の要点を必ず含めてください。
-出力は厳格に以下のJSONオブジェクト形式で返してください。
-例: { "keywords": ["AI", "自動運転", "製品名"] }
-"""
         keywords_json_str: str = ask_chatgpt(
             query,
-            system_prompt=system_prompt,
+            system_prompt=PROMPT_KEYWORD_EXTRACTION,
             model="gpt-4.1-mini",
             response_format={"type": "json_object"},
         )
         keywords: List[str]
         try:
             loaded_json: Any = json.loads(keywords_json_str)
-            # Validate structure before accessing "keywords"
             if isinstance(loaded_json, dict) and "keywords" in loaded_json and isinstance(loaded_json["keywords"], list):
-                keywords = [str(kw) for kw in loaded_json["keywords"]] # Ensure all keywords are strings
+                keywords = [str(kw) for kw in loaded_json["keywords"]]
             else:
                 keywords = []
-            # print(keywords) # Original print
-        except json.JSONDecodeError: # Catch JSON specific errors
+        except json.JSONDecodeError:
             keywords = []
-
-        # The original code had another check `if not isinstance(keywords, list): keywords = []`
-        # This is somewhat redundant if the try-except block correctly initializes or defaults keywords.
-        # However, to be safe and match original logic if loaded_json["keywords"] was not a list:
-        if not isinstance(keywords, list): # This handles cases where "keywords" might exist but not be a list
-             keywords = []
-
+        if not isinstance(keywords, list):
+            keywords = []
         return self.database.search_text_units_by_keywords(keywords)
 
     def search_hybrid(self, query: str, k: int = 10, vector_weight: float = 100, keyword_weight: float = 0.3) -> List[Dict[str, Any]]:
@@ -423,7 +378,6 @@ class Project:
         # However, make_id_key can return None if neither key is present.
         vector_dict: Dict[Union[int, str], SearchResultDict] = {id_key: item for item in vector_results if (id_key := make_id_key(item)) is not None}
         keyword_dict: Dict[Union[int, str], TextUnitDict] = {id_key: item for item in keyword_results if (id_key := make_id_key(item)) is not None}
-
 
         def vector_score_func(distance: float) -> float:
             # 距離が0の場合は最大スコア
@@ -453,7 +407,7 @@ class Project:
 
             # Ensure 'id' or 'text_unit_id' is in the final result for consistency
             if "id" not in base_info and "text_unit_id" not in base_info:
-                 base_info["id"] = id_ # Add the id back if it got lost somehow
+                base_info["id"] = id_ # Add the id back if it got lost somehow
 
             # Create the final result dictionary
             final_result_item: Dict[str, Any] = dict(base_info) # Start with a copy
@@ -473,6 +427,54 @@ class Project:
             document_id (int): ドキュメントID
         """
         self.database.delete_document_and_embeddings(document_id)
+
+    def chat_answer(self, query: str, search_mode: str = "hybrid", k: int = 5, **search_kwargs) -> str:
+        """
+        チャット形式で質問に対する答えをRAGを利用して生成する関数。
+        検索方式（vector/keyword/hybrid）をオプションで切り替え可能。
+
+        Args:
+            query (str): 質問文
+            search_mode (str): 検索方式。"vector"、"keyword"、"hybrid" のいずれか。
+            k (int): 取得件数（デフォルト5）
+            **search_kwargs: 検索方式ごとの追加パラメータ
+        Returns:
+            str: 回答文
+        """
+        if search_mode == "vector":
+            results = self.search_by_vector(query, k=k)
+            # ベクトル検索結果は text_unit_content キーを使用、文献番号を付与
+            context_parts = []
+            for i, r in enumerate(results, 1):
+                content = r.get("text_unit_content", "")
+                if content.strip():
+                    context_parts.append(f"文献({i}): {content}")
+            context = "\n\n".join(context_parts)
+        elif search_mode == "keyword":
+            results = self.search_by_keyword(query)
+            # キーワード検索結果は content キーを使用、文献番号を付与
+            context_parts = []
+            for i, r in enumerate(results[:k], 1):
+                content = r.get("content", "")
+                if content.strip():
+                    context_parts.append(f"文献({i}): {content}")
+            context = "\n\n".join(context_parts)
+        elif search_mode == "hybrid":
+            results = self.search_hybrid(query, k=k, **search_kwargs)
+            # ハイブリッド検索結果は content または text_unit_content キーを使用、文献番号を付与
+            context_parts = []
+            for i, r in enumerate(results, 1):
+                content = r.get("content", "") or r.get("text_unit_content", "")
+                if content.strip():
+                    context_parts.append(f"文献({i}): {content}")
+            context = "\n\n".join(context_parts)
+        else:
+            raise ValueError(f"Unknown search_mode: {search_mode}")
+
+        prompt = PROMPT_CHAT_ANSWER.format(context=context, query=query)
+        print(prompt)
+        answer = ask_chatgpt(prompt, model="gpt-4.1-mini")
+        return answer
 
 
 class Document:
