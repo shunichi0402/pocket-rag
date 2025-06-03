@@ -4,7 +4,7 @@
 if ! command -v rye &> /dev/null
 then
     echo "rye がインストールされていません。インストールを開始します..."
-    curl -sSf https://rye-up.com/get | bash
+    curl -sSf https://rye.astral.sh/get | bash
     source "$HOME/.rye/env"
     echo "rye のインストールが完了しました。"
 else
