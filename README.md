@@ -17,14 +17,9 @@ PLaMo埋め込みモデルとChatGPT APIを活用し、ベクトル検索・キ�
 ### 1. セットアップ
 
 - Python 3.10以上推奨
-- 必要なパッケージをインストール
-  ```
-  pip install git+https://github.com/shunichi0402/pocket-rag.git
-  ```
-
-- .envファイルにOpenAI APIキー等を設定
-  ```
-  OPENAI_API_KEY=sk-...
+- 以下のコマンドを実行してセットアップスクリプトを実行します。
+  ```bash
+  ./setup.sh
   ```
 
 ### 2. サンプルコード
